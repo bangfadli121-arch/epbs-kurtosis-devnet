@@ -37,6 +37,11 @@ network_params:
   electra_fork_epoch: 0
   fulu_fork_epoch: 1
   gloas_fork_epoch: 2
+  # BPO: fulu != 0 (genesis) requires every bpo_*_epoch >= fulu_fork_epoch
+  # (input_parser.star fails otherwise). bpo_3/4/5 default to FAR_FUTURE,
+  # which is already >= 1, so only 1 and 2 need setting here.
+  bpo_1_epoch: 1
+  bpo_2_epoch: 1
   # amsterdam_fork_epoch: isi sesuai schema package (EL half Glamsterdam).
   # Kunci di atas bertipe epoch; bila schema package memakai timestamp
   # (mis. *_fork_time), konversi ke waktu genesis + epoch*384 detik.
