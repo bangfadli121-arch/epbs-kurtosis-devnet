@@ -1,7 +1,6 @@
-# PoC Kurtosis devnet — CATATAN (hasil feasibility + penyiapan)
+# Kurtosis devnet — CATATAN (hasil feasibility + penyiapan)
 
 **Tanggal:** 12 Nov 2026, ~11:40–11:50 WIB
-**Temuan:** ePBS fork-transition, EIP-7732 (Gloas) — cacat spec (bukan client)
 **Status: TIDAK DIBANGUN — devnet TIDAK BISA jalan di VM ini. Bukan kegagalan
 hunting; blocker infrastruktur. Semua yang di bawah ini terukur, bukan dugaan.**
 
@@ -48,7 +47,7 @@ Selisihnya ~6–10x. Swap 1 GiB (sudah 40% terpakai) tidak menolong — client
 Ethereum yang di-swap akan timeout slot dan devnet tidak akan finalisasi.
 Menginstal Docker saja tidak akan mengubah hasil: Docker butuh RAM untuk
 container-nya, dan RAM itulah yang tidak ada. CPU juga tipis (1,5 CPU shared
-untuk EL+CL yang harus memproses slot 12 detik + payload bid).
+untuk EL+CL yang harus memproses slot 12 detik).
 
 Disk 7,4 GiB bebas juga mepet untuk image (geth ~0,5 GiB, lighthouse ~0,3 GiB,
 Kurtosis engine + ethereum-package + genesis assets), tapi ini blocker kedua;
@@ -75,7 +74,7 @@ Tidak dilakukan.
 Config siap-jalan ada di `params.yaml` (DRAFT — BELUM DIJALANKAN, lihat §4).
 Perintah persis untuk mesin yang mampu ada di `RUNBOOK.md` §B–§E.
 
-**Catatan soal Kaggle (mesin yang fadli sudah punya): tidak bisa.**
+**Catatan soal Kaggle: tidak bisa.**
 Kaggle kernel tidak memberi Docker daemon (tidak ada privileged mode), dan
 Kurtosis mutlak butuh Docker. RAM Kaggle (~13 GiB) cukup, tapi tanpa Docker,
 Kurtosis tidak bisa jalan. Jadi Kaggle bukan jalan keluar untuk ini.
@@ -103,82 +102,35 @@ Config ini TIDAK pernah dieksekusi di VM ini. Jangan dikutip sebagai hasil.
 
 ---
 
-## 5. Apa yang akan dibuktikan devnet ini (dan apa yang TIDAK)
+## 5. Yang diamati devnet ini
 
-### Yang bisa diamati kalau devnet jalan
 1. Apakah chain mencapai boundary fork (epoch Gloas) dan apakah **blok Gloas
    pertama ter-build + ter-propagasi + ter-finalisasi** — via log CL
    (`kurtosis service logs <enclave> <cl-service>`) dan endpoint REST CL
    (`/eth/v1/beacon/headers`, `/eth/v1/beacon/blocks`, finalized checkpoint).
-2. Jika blok pertama JALAN NORMAL (kemungkinan besar): **di mana client
-   menyimpang dari spec** — yaitu bukti mitigasi. Yang dicari: log/kode yang
-   menunjukkan client memperlakukan parent pra-Gloas sebagai FULL, atau
-   mendaftarkan payload pra-fork sebagai verified, atau menangani parent
-   bertipe Fulu tanpa membaca `signed_execution_payload_bid`. Itu bukti
-   "spec divergence" — **memperkuat** framing laporan, bukan membatalkannya.
-3. Jika blok pertama MACET (tidak ter-build / tidak ter-finalisasi / fork-choice
-   error): log + slot di mana macet, pesan error persis, dan apakah itu cocok
-   dengan rantai D1–D6 dari PoC pyspec.
+2. Log CL di sekitar slot pertama epoch Gloas (error / reorg / finalisasi).
+3. Snapshot API beacon sebelum dan sesudah boundary.
 
-### Yang TIDAK boleh diklaim dari devnet ini
-- Devnet client stock yang jalan normal **bukan** bukti cacatnya tidak ada —
-  cacatnya ada di **spec**, dan client memang menangani boundary ini (itu
-  kenapa Sepolia/Devnet-11 jalan). Hasil "jalan normal" adalah bukti mitigasi,
-  bukan bantahan.
-- **Jangan patch client** untuk memaksakan stall lalu mengklaim itu bukti
-  dunia nyata. Client yang dimodifikasi mengikuti spec secara harfiah adalah
-  eksperimen sintetis yang terpisah — kalau dilakukan, harus dilabeli sebagai
-  itu, bukan sebagai reproduksi.
-- Devnet **tidak membuktikan halt mainnet**. Glamsterdam belum di mainnet;
-  temuan ini tetap cacat spec/divergensi, bukan kerentanan yang bisa
-  dieksploitasi attacker (tidak ada aksi attacker).
+Devnet yang jalan normal **bukan** bukti apa pun tentang spec — client memang
+menangani boundary ini di implementasi mereka (itu kenapa Sepolia/Devnet-11
+jalan). Devnet **tidak membuktikan** apa pun soal mainnet. Glamsterdam belum
+di mainnet.
+
+**Jangan patch client** untuk memaksakan stall lalu mengklaim itu bukti
+dunia nyata. Client yang dimodifikasi adalah eksperimen sintetis yang terpisah
+— kalau dilakukan, harus dilabeli sebagai itu, bukan sebagai reproduksi.
+
+Analisis detail dari hasil devnet bersifat privat dan tidak ada di repo ini.
 
 ---
 
-## 6. Alternatif "state test (EVM/goevmlab)" — TIDAK BISA untuk temuan ini
+## 6. File di repo ini
 
-Form EF menerima dua bentuk PoC: Kurtosis devnet ATAU state test
-(EVM/goevmlab). Untuk temuan ini, **state test tidak applicable**, dengan
-alasan:
-
-- State test menguji **execution-layer**: hasil eksekusi transaksi EVM terhadap
-  state tertentu.
-- Cacat ini ada di **consensus-layer**: fork-transition (`upgrade_to_gloas`),
-  fork-choice (`get_parent_payload_status`, `get_head`, `on_block`), dan
-  store (`store.payloads`). Tidak ada transaksi EVM yang bisa menunjukkannya.
-- Jadi satu-satunya bentuk PoC yang diterima form dan **bisa** mendemonstrasikan
-  cacat ini adalah **Kurtosis devnet**. Tidak ada jalan pintas via goevmlab.
-
----
-
-## 7. Dampak ke draf laporan EF (§10 open item 1)
-
-Status setelah run ini (draf sudah diperbarui di §10):
-
-1. **Gap PoC Kurtosis BELUM tertutup.** PoC yang ada tetap reproduksi pyspec
-   deterministik (`poc_fork_transition_empty_parent.py`, exit 0 — cacat
-   terbukti di reference implementation), tapi itu **bukan** Kurtosis devnet.
-   Form EF mewajibkan centang: "Includes a Kurtosis devnet or a state test
-   (EVM/goevmlab)" + "Demonstrates the vulnerability end-to-end" + "I
-   understand unit tests alone are not accepted". **Kotak pertama tidak bisa
-   dicentang dengan jujur hari ini.**
-2. Opsi yang tersisa:
-   - **(a)** Jalankan `params.yaml` + `RUNBOOK.md` di mesin yang memenuhi §3
-     (bukan VM ini, bukan Kaggle — butuh Docker + ≥8 GiB RAM bebas).
-   - **(b)** Submit dengan PoC pyspec saja, dengan catatan jujur di laporan
-     bahwa PoC-nya reproduksi reference implementation (bukan Kurtosis) —
-     dan terima risiko panel mengabaikan laporan ("Without a clear
-     reproducible attack, the issue will be ignored, and there is no
-     refund" — burn $10 hangus).
-   - **(c)** Tahan submit sampai (a) bisa dilakukan.
-3. Tidak ada perubahan pada severity di draf (tetap High, bukan Critical).
-
----
-
-## 8. File di direktori ini
-
-- `CATATAN.md` — file ini (temuan feasibility + kejujuran + dampak ke draf).
+- `CATATAN.md` — file ini (temuan feasibility + spek mesin).
 - `params.yaml` — config ethereum-package DRAFT (belum dijalankan).
 - `RUNBOOK.md` — perintah persis: (A) feasibility yang sudah dijalankan di
   VM ini + hasilnya, (B) instalasi di mesin yang mampu, (C) perintah run,
   (D) perintah observasi di boundary fork, (E) cleanup.
+- `.github/workflows/kurtosis-epbs-devnet.yml` — workflow GitHub Actions
+  (manual trigger): install Kurtosis CLI → run devnet → tunggu epoch Gloas
+  → kumpulkan log + snapshot → upload artifact → cleanup.
