@@ -26,7 +26,11 @@ participants:
     cl_type: lighthouse
     # el_image / cl_image: isi tag Gloas-capable secara eksplisit di run time
     # (contoh pola: ethpandaops/geth:<versi-gloas>, ethpandaops/lighthouse:<versi-gloas>)
-    validator_count: 8
+    # validator_count HARUS >= 128: Fulu aktif (epoch 1) mengharuskan minimal
+    # satu node punya 128+ validator ATAU supernode ATAU perfect_peerdas
+    # (input_parser.star ~l.694; run #43160382328 gagal tanpa ini).
+    # 128 kunci di satu node itu murah (cuma kunci BLS, bukan kontainer baru).
+    validator_count: 128
     count: 1
 
 network_params:
