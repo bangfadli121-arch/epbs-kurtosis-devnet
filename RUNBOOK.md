@@ -1,4 +1,4 @@
-# RUNBOOK — PoC Kurtosis devnet ePBS fork-transition
+# RUNBOOK — Kurtosis devnet, boundary fork Fulu → Gloas
 
 ## A. Feasibility yang SUDAH dijalankan di VM ini (12 Nov 2026 ~11:40 WIB)
 
@@ -56,10 +56,9 @@ kurtosis config init   # kalau diminta
 ## C. Menjalankan devnet (mesin yang mampu)
 
 ```bash
-cd ~/workspace/bug-bounty/ethereum-foundation/poc-glamsterdam/kurtosis-devnet
 # Verifikasi lebih dulu kunci fork-epoch + tag image di params.yaml (lihat header file).
-kurtosis run github.com/ethpandaops/ethereum-package "$(cat params.yaml)" --enclave ePBS-gloas
-kurtosis enclave inspect ePBS-gloas
+kurtosis run github.com/ethpandaops/ethereum-package "$(cat params.yaml)" --enclave gloas-boundary
+kurtosis enclave inspect gloas-boundary
 ```
 
 Tunggu sampai chain melewati epoch Gloas (epoch 2 per params.yaml) — beberapa
@@ -69,8 +68,8 @@ menit. Jangan sentuh apa pun sebelum boundary tercapai.
 
 ```bash
 # Daftar service + port CL (ganti <cl> dengan nama service CL dari inspect)
-kurtosis enclave inspect ePBS-gloas
-kurtosis service logs ePBS-gloas <cl-service-name> | grep -iE "gloas|fork|payload_status|get_head|on_block|finaliz" | tail -100
+kurtosis enclave inspect gloas-boundary
+kurtosis service logs gloas-boundary <cl-service-name> | grep -iE "gloas|fork|finaliz" | tail -100
 
 # Via API CL (port dari inspect; contoh port 4000):
 curl -s localhost:<CL_HTTP_PORT>/eth/v1/beacon/headers | head -50
@@ -79,17 +78,15 @@ curl -s "localhost:<CL_HTTP_PORT>/eth/v1/beacon/blocks/head" | head -20
 
 # Yang dicatat:
 #  1. Slot + epoch blok Gloas pertama; apakah ada, apakah finalized.
-#  2. Log di sekitar slot pertama epoch Gloas (error / AttributeError / reorg).
-#  3. Kalau jalan normal: bukti client menyimpang dari spec (cari di log/kode
-#     client: parent pra-Gloas sebagai FULL, payload pra-fork verified,
-#     penanganan parent Fulu tanpa signed_execution_payload_bid).
-kurtosis files inspect ePBS-gloas   # kalau perlu ambil log ke file
+#  2. Log di sekitar slot pertama epoch Gloas (error / reorg).
+#  3. Snapshot API beacon di atas, sebelum dan sesudah boundary.
+kurtosis files inspect gloas-boundary   # kalau perlu ambil log ke file
 ```
 
 ## E. Cleanup (mesin yang mampu)
 
 ```bash
-kurtosis enclave stop ePBS-gloas
+kurtosis enclave stop gloas-boundary
 kurtosis clean -a   # hapus semua enclave + image yang tidak dipakai
 docker system df    # cek disk kembali
 ```
@@ -99,5 +96,5 @@ docker system df    # cek disk kembali
 - Tidak ada instalasi Docker/Kurtosis (tidak ada gunanya tanpa RAM).
 - Tidak ada pull image, tidak ada container, tidak ada enclave.
 - Tidak ada patch client, tidak ada klaim reproduksi.
-- PoC pyspec tetap satu-satunya bukti eksekusi cacat (exit 0, di
-  ../poc_fork_transition_empty_parent.py).
+
+Analisis detail dari hasil devnet bersifat privat dan tidak ada di repo ini.
