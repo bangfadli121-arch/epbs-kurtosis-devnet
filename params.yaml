@@ -1,0 +1,53 @@
+# ethereum-package params — DRAFT, BELUM DIJALANKAN
+# =================================================
+# Devnet minimal untuk reproduksi cacat fork-transition ePBS (EIP-7732).
+# Dibuat 12 Nov 2026 sebagai PENYIAPAN — TIDAK PERNAH dieksekusi di VM ini
+# (VM tidak bisa jalanin Docker/Kurtosis: RAM tersedia ~578 MiB, lihat
+# CATATAN.md). Jangan dikutip sebagai hasil.
+#
+# SEBELUM `kurtosis run` di mesin yang mampu, VERIFIKASI:
+#   1. Nama kunci fork-epoch di `network_params` sesuai versi ethereum-package
+#      yang dipakai (cek schema `network_params` di repo
+#      ethpandaops/ethereum-package versi itu — kunci berubah antar versi).
+#   2. Tag image client HARUS yang mendukung Gloas (mis. dari tabel rilis
+#      Sepolia: Lighthouse 8.3.0-rc.0 / Prysm 7.2.0 / Teku 26.9.1,
+#      geth 1.17.7, atau lebih baru). Image lama tanpa Gloas tidak akan
+#      mencapai fork.
+#   3. `validator_count`: cukup untuk finalisasi. Satu participant dengan
+#      sedikit validator tetap bisa finalisasi (quorum internal), tapi pakai
+#      nilai default package bila ragu.
+#
+# Cara pakai (mesin yang mampu, lihat RUNBOOK.md):
+#   kurtosis run github.com/ethpandaops/ethereum-package "$(cat params.yaml)"
+
+participants:
+  - el_type: geth
+    cl_type: lighthouse
+    # el_image / cl_image: isi tag Gloas-capable secara eksplisit di run time
+    # (contoh pola: ethpandaops/geth:<versi-gloas>, ethpandaops/lighthouse:<versi-gloas>)
+    validator_count: 8
+    count: 1
+
+network_params:
+  network: kurtosis
+  # Genesis di Fulu, fork Gloas cepat (epoch kecil) supaya boundary
+  # cepat tercapai dan mudah diamati. Epoch 0 = genesis; epoch 1 = Fulu;
+  # sesuaikan angka persisnya dengan schema package yang dipakai.
+  electra_fork_epoch: 0
+  fulu_fork_epoch: 1
+  gloas_fork_epoch: 2
+  # amsterdam_fork_epoch: isi sesuai schema package (EL half Glamsterdam).
+  # Kunci di atas bertipe epoch; bila schema package memakai timestamp
+  # (mis. *_fork_time), konversi ke waktu genesis + epoch*384 detik.
+  seconds_per_slot: 12
+  slots_per_epoch: 32
+
+# Observasi yang dicari di boundary (epoch 2):
+#   - Apakah blok Gloas pertama ter-build, ter-propagasi, ter-finalisasi?
+#   - Log CL di sekitar slot pertama epoch 2: get_parent_payload_status,
+#     get_head, should_build_on_full, on_block, is_payload_verified.
+#   - Kalau jalan normal: cari di mana client menyimpang dari spec
+#     (parent pra-Gloas diperlakukan FULL / payload pra-fork didaftarkan
+#     verified / parent Fulu ditangani tanpa signed_execution_payload_bid).
+#   - Kalau macet: catat slot, pesan error persis, dan cocokkan dengan D1-D6
+#     dari poc_fork_transition_empty_parent.py (../poc_fork_transition_empty_parent.py).
