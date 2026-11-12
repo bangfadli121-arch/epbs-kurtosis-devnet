@@ -46,7 +46,6 @@ network_params:
   # Kunci di atas bertipe epoch; bila schema package memakai timestamp
   # (mis. *_fork_time), konversi ke waktu genesis + epoch*384 detik.
   seconds_per_slot: 12
-  slots_per_epoch: 32
 
 # Observasi yang dicari di boundary (epoch 2):
 #   - Apakah blok Gloas pertama ter-build, ter-propagasi, ter-finalisasi?
