@@ -2,29 +2,36 @@
 #
 # Runs the minimal ethereum-package devnet for the EIP-7732 (ePBS)
 # fork-transition observation on a free GitHub-hosted runner
-# (ubuntu-24.04: 4 vCPU, 16 GB RAM, 14 GB SSD, Docker preinstalled).
-# Public repo = free, unlimited standard-runner minutes.
+# (ubuntu-24.04: 4 vCPU, Docker preinstalled).
+#
+# MEASURED runner spec (run #43158812433, Environment check):
+#   disk 145G total, 86G free (NOT the 14 GB the GitHub docs claim);
+#   RAM 15Gi total, 14Gi available (NOT 16 GB); CPU 4; Docker 28.0.4.
 #
 # What this does:
-#   1. Installs the Kurtosis CLI.
-#   2. Runs ethpandaops/ethereum-package with params.yaml
+#   1. Installs the Kurtosis CLI 1.22.2 (from sdk.kurtosis.com — the old
+#      apt repo caps at 1.15.2, whose engine lacks the GpuConfig builtin).
+#   2. Validates params.yaml against the ethereum-package schema rules
+#      that bit earlier runs (fail fast, with a clear message each time).
+#   3. Runs ethpandaops/ethereum-package with params.yaml
 #      (Fulu genesis, Gloas fork at epoch 2, 1 x geth + Lighthouse).
-#   3. Waits for the chain to pass the Gloas fork boundary.
-#   4. Collects CL logs + beacon API snapshots around the boundary.
-#   5. Uploads everything as a workflow artifact, then cleans up.
+#   4. Polls the CL beacon API until the chain finalises past epoch 2
+#      (bounded wait), instead of sleeping blind.
+#   5. Collects ALL service logs + beacon API snapshots around the boundary.
+#   6. Uploads everything as a workflow artifact, then cleans up.
 #
 # What this does NOT contain: the finding itself. This repo holds only
 # generic devnet config + observation scripts. The bug report draft and
 # the pyspec PoC stay private until submission.
 #
-# Known limits (honest):
-#   - 14 GB runner disk is tight for a devnet; the job checks disk
-#     before/after and fails loudly if it runs out. If it does, the
-#     fallback is a bigger runner or a cloud VM (see CATATAN.md).
-#   - params.yaml fork-epoch keys + client image tags MUST match the
-#     ethereum-package version used at run time. The job prints the
-#     package version and validates the params keys before running;
-#     if validation fails, the job stops with the exact error.
+# Gotchas fixed the hard way (runs #1–#5, 12 Nov 2026):
+#   - `kurtosis enclave inspect` has NO `--format` flag (verified against
+#     CLI 1.22.2 --help). Any `--format json` call fails with "unknown
+#     flag". Service logs therefore use `kurtosis service logs
+#     --all-services` (needs no service names); the CL endpoint uses
+#     `kurtosis port print <enclave> cl-1-lighthouse-geth http`.
+#   - Service names are deterministic in ethereum-package HEAD:
+#     el-1-geth-lighthouse, cl-1-lighthouse-geth (cl-{i}-{cl}-{el}).
 #   - A stock-client devnet is EXPECTED to advance past the fork
 #     (clients handle this boundary themselves — that is the mitigation).
 #     The observation step therefore records WHERE the client deviates
@@ -68,42 +75,106 @@ jobs:
           kurtosis analytics disable || true
           kurtosis config init || true
 
-      - name: Fetch ethereum-package version + validate params keys
+      - name: Validate params.yaml (fail fast, clear message)
+        run: |
+          P="${GITHUB_WORKSPACE}/params.yaml"
+          echo "== our params.yaml (as committed) =="; cat "$P"
+          # Rule 1: slots_per_epoch is NOT a network_params field (32 is
+          # hardcoded in consensus). Run #43159800192 died on exactly this.
+          if grep -qE '^\s*slots_per_epoch\s*:' "$P"; then
+            echo "INVALID: slots_per_epoch is not a network_params field — remove it"; exit 1
+          fi
+          # Rule 2: Fulu active (fulu_fork_epoch set and != far future) needs
+          # validator_count >= 128 on at least one node (input_parser.star).
+          # Run #43160382328 died on validator_count: 8.
+          VC="$(grep -E '^\s*validator_count\s*:' "$P" | head -1 | grep -oE '[0-9]+')"
+          FULU="$(grep -E '^\s*fulu_fork_epoch\s*:' "$P" | head -1 | grep -oE '[0-9]+')"
+          echo "validator_count=$VC fulu_fork_epoch=$FULU"
+          if [ -n "$FULU" ] && [ "${VC:-0}" -lt 128 ]; then
+            echo "INVALID: Fulu is enabled but validator_count ($VC) < 128"; exit 1
+          fi
+          # Rule 3: fulu != 0 requires every bpo_*_epoch >= fulu_fork_epoch.
+          BPO1="$(grep -E '^\s*bpo_1_epoch\s*:' "$P" | head -1 | grep -oE '[0-9]+')"
+          BPO2="$(grep -E '^\s*bpo_2_epoch\s*:' "$P" | head -1 | grep -oE '[0-9]+')"
+          echo "bpo_1_epoch=${BPO1:-unset} bpo_2_epoch=${BPO2:-unset}"
+          if [ -n "$FULU" ] && [ "$FULU" != 0 ]; then
+            for b in "$BPO1" "$BPO2"; do
+              if [ -n "$b" ] && [ "$b" -lt "$FULU" ]; then
+                echo "INVALID: bpo epoch ($b) < fulu_fork_epoch ($FULU)"; exit 1
+              fi
+            done
+          fi
+          echo "params validation OK"
+
+      - name: Fetch ethereum-package version
         run: |
           git clone --depth 1 https://github.com/ethpandaops/ethereum-package /tmp/ethereum-package
           echo "== package version =="
           (cd /tmp/ethereum-package && git rev-parse --short HEAD && git log -1 --format=%ci)
-          echo "== network_params schema keys (grep) =="
-          grep -rn "gloas_fork_epoch\|fulu_fork_epoch\|electra_fork_epoch" /tmp/ethereum-package/src/package_io/*.star /tmp/ethereum-package/src/*.star 2>/dev/null | head -20 || true
-          echo "== our params.yaml (as committed) =="; cat "${GITHUB_WORKSPACE}/params.yaml"
-          echo "== BPO epochs from our params (must be >= fulu_fork_epoch) =="
-          grep -E "bpo_[0-9]_epoch|fulu_fork_epoch|gloas_fork_epoch" "${GITHUB_WORKSPACE}/params.yaml"
 
       - name: Run devnet (Fulu genesis, Gloas fork epoch 2)
         run: |
           kurtosis run github.com/ethpandaops/ethereum-package "$(cat "${GITHUB_WORKSPACE}/params.yaml")" --enclave ePBS-gloas --image-download always
           kurtosis enclave inspect ePBS-gloas
 
-      - name: Wait for chain to pass Gloas fork (epoch 2)
+      - name: Wait for chain to finalise past epoch 2
+        # Polls the CL beacon API for real finality (breaks early when done),
+        # bounded to 90 minutes. Fork hits at epoch 2 (~13 min after genesis
+        # at 12 s/slot); finality normally follows within a few epochs.
+        # Falls back to plain waiting if the CL endpoint cannot be resolved
+        # (the observation step is the primary evidence either way).
         run: |
-          echo "Waiting for the chain to finalise past epoch 2..."
-          for i in $(seq 1 60); do
-            # CL HTTP port is printed by enclave inspect; find it via service inspect
-            CL_URL="$(kurtosis enclave inspect ePBS-gloas --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print([s['ports']['http']['url'] for s in d.get('services',[]) if 'lighthouse' in s.get('name','').lower()][:1])" 2>/dev/null || true)"
-            echo "attempt $i: CL_URL=${CL_URL:-not-resolved-yet}"
+          CL_SVC="cl-1-lighthouse-geth"
+          CL_URL=""
+          for i in $(seq 1 90); do
+            if [ -z "$CL_URL" ]; then
+              EP="$(kurtosis port print ePBS-gloas "$CL_SVC" http --format ip,number 2>/dev/null || true)"
+              if [ -n "$EP" ]; then
+                CL_URL="http://$(echo "$EP" | tr ',' ':')"
+                echo "CL endpoint resolved: $CL_URL"
+              fi
+            fi
+            if [ -n "$CL_URL" ]; then
+              FIN="$(curl -s -m 10 "$CL_URL/eth/v1/beacon/finality_checkpoints" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['finalized']['epoch'])" 2>/dev/null || echo "?")"
+              HEAD="$(curl -s -m 10 "$CL_URL/eth/v1/beacon/headers/head" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); h=d['data']['header']['message']; print('slot',h['slot'],'epoch',int(h['slot'])//32)" 2>/dev/null || echo "?")"
+              echo "minute $i: finalized_epoch=$FIN head=$HEAD"
+              if [ "$FIN" != "?" ] && [ "$FIN" -ge 2 ] 2>/dev/null; then
+                echo "CHAIN FINALISED PAST EPOCH 2 — proceeding to observation"
+                break
+              fi
+            else
+              echo "minute $i: CL endpoint not resolved yet — waiting"
+            fi
             sleep 60
           done
-          echo "wait loop done — proceeding to observation (logs + snapshots)"
+          echo "wait done — proceeding to observation (logs + snapshots)"
 
       - name: Observe fork boundary (logs + API snapshots)
         run: |
           mkdir -p observations
           kurtosis enclave inspect ePBS-gloas > observations/enclave-inspect.txt 2>&1 || true
-          # Dump logs of every service (bounded), then grep the boundary
-          for svc in $(kurtosis enclave inspect ePBS-gloas --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(s['name'] for s in d.get('services',[])))" 2>/dev/null); do
-            echo "== logs: $svc ==" >> observations/all-services.log
-            kurtosis service logs ePBS-gloas "$svc" >> observations/all-services.log 2>&1 || true
-          done
+          # All services, all lines — no service-name discovery needed
+          # (`enclave inspect` has no --format flag; `service logs
+          # --all-services` is the supported way).
+          kurtosis service logs ePBS-gloas --all-services -a > observations/all-services.log 2>&1 || true
+          echo "== all-services.log lines: $(wc -l < observations/all-services.log) =="
+          if [ ! -s observations/all-services.log ]; then
+            echo "WARNING: no service logs collected — check the log command above"
+          fi
+          # Beacon API snapshots (best effort; CL name is deterministic)
+          CL_SVC="cl-1-lighthouse-geth"
+          EP="$(kurtosis port print ePBS-gloas "$CL_SVC" http --format ip,number 2>/dev/null || true)"
+          if [ -n "$EP" ]; then
+            CL_URL="http://$(echo "$EP" | tr ',' ':')"
+            echo "CL endpoint: $CL_URL"
+            curl -s -m 20 "$CL_URL/eth/v1/beacon/headers" > observations/beacon-headers.json || true
+            curl -s -m 20 "$CL_URL/eth/v1/beacon/finality_checkpoints" > observations/finality-checkpoints.json || true
+            curl -s -m 20 "$CL_URL/eth/v1/beacon/blocks/head" > observations/beacon-head-block.json || true
+            curl -s -m 20 "$CL_URL/eth/v1/node/health" > observations/beacon-node-health.txt || true
+            echo "finality_checkpoints: $(cat observations/finality-checkpoints.json 2>/dev/null | head -c 400)"
+          else
+            echo "WARNING: could not resolve CL endpoint — API snapshots skipped"
+          fi
           grep -iE "gloas|fork|payload_status|get_head|on_block|finaliz|error|AttributeError" observations/all-services.log | tail -200 > observations/boundary-grep.txt || true
           echo "== boundary grep lines: $(wc -l < observations/boundary-grep.txt) =="
           df -h /
