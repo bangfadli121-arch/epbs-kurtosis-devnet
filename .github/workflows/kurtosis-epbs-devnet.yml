@@ -55,10 +55,17 @@ jobs:
           test "$(df --output=avail -BG / | tail -1 | tr -dc '0-9')" -ge 10 || { echo "DISK TOO LOW (<10G free) — aborting"; exit 1; }
 
       - name: Install Kurtosis CLI
+        # NOTE: the old apt repo (apt.fury.io/kurtosis-tech) caps at CLI 1.15.2,
+        # whose engine does NOT define the GpuConfig Starlark builtin — the
+        # package at HEAD uses it (zkboost_launcher.star:379) and Starlark
+        # evaluation fails with "undefined: GpuConfig" (run #43158812433).
+        # ethPandaOps' own CI installs from sdk.kurtosis.com instead, which
+        # carries the current release (1.22.2 as of Nov 2026).
         run: |
-          echo "deb [trusted=yes] https://apt.fury.io/kurtosis-tech/ /" | sudo tee /etc/apt/sources.list.d/kurtosis.list
+          echo "deb [trusted=yes] https://sdk.kurtosis.com/kurtosis-cli-release-artifacts/ /" | sudo tee /etc/apt/sources.list.d/kurtosis.list
           sudo apt-get update -qq && sudo apt-get install -y -qq kurtosis-cli
           kurtosis version
+          kurtosis analytics disable || true
           kurtosis config init || true
 
       - name: Fetch ethereum-package version + validate params keys
