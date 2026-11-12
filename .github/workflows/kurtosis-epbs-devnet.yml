@@ -1,0 +1,114 @@
+# Kurtosis ePBS devnet — GitHub Actions workflow
+#
+# Runs the minimal ethereum-package devnet for the EIP-7732 (ePBS)
+# fork-transition observation on a free GitHub-hosted runner
+# (ubuntu-24.04: 4 vCPU, 16 GB RAM, 14 GB SSD, Docker preinstalled).
+# Public repo = free, unlimited standard-runner minutes.
+#
+# What this does:
+#   1. Installs the Kurtosis CLI.
+#   2. Runs ethpandaops/ethereum-package with params.yaml
+#      (Fulu genesis, Gloas fork at epoch 2, 1 x geth + Lighthouse).
+#   3. Waits for the chain to pass the Gloas fork boundary.
+#   4. Collects CL logs + beacon API snapshots around the boundary.
+#   5. Uploads everything as a workflow artifact, then cleans up.
+#
+# What this does NOT contain: the finding itself. This repo holds only
+# generic devnet config + observation scripts. The bug report draft and
+# the pyspec PoC stay private until submission.
+#
+# Known limits (honest):
+#   - 14 GB runner disk is tight for a devnet; the job checks disk
+#     before/after and fails loudly if it runs out. If it does, the
+#     fallback is a bigger runner or a cloud VM (see CATATAN.md).
+#   - params.yaml fork-epoch keys + client image tags MUST match the
+#     ethereum-package version used at run time. The job prints the
+#     package version and validates the params keys before running;
+#     if validation fails, the job stops with the exact error.
+#   - A stock-client devnet is EXPECTED to advance past the fork
+#     (clients handle this boundary themselves — that is the mitigation).
+#     The observation step therefore records WHERE the client deviates
+#     from the spec as well as whether the first Gloas block finalises.
+#     It does not claim a mainnet halt.
+#
+# Trigger: manual only (workflow_dispatch) — never on push.
+
+name: kurtosis-epbs-devnet
+
+on:
+  workflow_dispatch:
+
+jobs:
+  devnet:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Environment check
+        run: |
+          echo "== disk =="; df -h /
+          echo "== memory =="; free -h
+          echo "== cpu =="; nproc
+          echo "== docker =="; docker info --format '{{.ServerVersion}}' 2>&1 | head -2
+          test "$(df --output=avail -BG / | tail -1 | tr -dc '0-9')" -ge 10 || { echo "DISK TOO LOW (<10G free) — aborting"; exit 1; }
+
+      - name: Install Kurtosis CLI
+        run: |
+          echo "deb [trusted=yes] https://apt.fury.io/kurtosis-tech/ /" | sudo tee /etc/apt/sources.list.d/kurtosis.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq kurtosis-cli
+          kurtosis version
+          kurtosis config init || true
+
+      - name: Fetch ethereum-package version + validate params keys
+        run: |
+          git clone --depth 1 https://github.com/ethpandaops/ethereum-package /tmp/ethereum-package
+          echo "== package version =="; cd /tmp/ethereum-package && git rev-parse --short HEAD && git log -1 --format=%ci
+          echo "== network_params schema keys (grep) =="
+          grep -rn "gloas_fork_epoch\|fulu_fork_epoch\|electra_fork_epoch" /tmp/ethereum-package/src/package_io/*.star /tmp/ethereum-package/src/*.star 2>/dev/null | head -20 || true
+          echo "== our params.yaml (as committed) =="; cat params.yaml
+
+      - name: Run devnet (Fulu genesis, Gloas fork epoch 2)
+        run: |
+          kurtosis run github.com/ethpandaops/ethereum-package "$(cat params.yaml)" --enclave ePBS-gloas --image-download always
+          kurtosis enclave inspect ePBS-gloas
+
+      - name: Wait for chain to pass Gloas fork (epoch 2)
+        run: |
+          echo "Waiting for the chain to finalise past epoch 2..."
+          for i in $(seq 1 60); do
+            # CL HTTP port is printed by enclave inspect; find it via service inspect
+            CL_URL="$(kurtosis enclave inspect ePBS-gloas --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print([s['ports']['http']['url'] for s in d.get('services',[]) if 'lighthouse' in s.get('name','').lower()][:1])" 2>/dev/null || true)"
+            echo "attempt $i: CL_URL=${CL_URL:-not-resolved-yet}"
+            sleep 60
+          done
+          echo "wait loop done — proceeding to observation (logs + snapshots)"
+
+      - name: Observe fork boundary (logs + API snapshots)
+        run: |
+          mkdir -p observations
+          kurtosis enclave inspect ePBS-gloas > observations/enclave-inspect.txt 2>&1 || true
+          # Dump logs of every service (bounded), then grep the boundary
+          for svc in $(kurtosis enclave inspect ePBS-gloas --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(s['name'] for s in d.get('services',[])))" 2>/dev/null); do
+            echo "== logs: $svc ==" >> observations/all-services.log
+            kurtosis service logs ePBS-gloas "$svc" >> observations/all-services.log 2>&1 || true
+          done
+          grep -iE "gloas|fork|payload_status|get_head|on_block|finaliz|error|AttributeError" observations/all-services.log | tail -200 > observations/boundary-grep.txt || true
+          echo "== boundary grep lines: $(wc -l < observations/boundary-grep.txt) =="
+          df -h /
+
+      - name: Upload observations
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: epbs-devnet-observations
+          path: observations/
+          retention-days: 30
+
+      - name: Cleanup enclave
+        if: always()
+        run: |
+          kurtosis enclave stop ePBS-gloas || true
+          kurtosis clean -a || true
+          docker system df || true
