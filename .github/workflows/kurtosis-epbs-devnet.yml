@@ -64,14 +64,17 @@ jobs:
       - name: Fetch ethereum-package version + validate params keys
         run: |
           git clone --depth 1 https://github.com/ethpandaops/ethereum-package /tmp/ethereum-package
-          echo "== package version =="; cd /tmp/ethereum-package && git rev-parse --short HEAD && git log -1 --format=%ci
+          echo "== package version =="
+          (cd /tmp/ethereum-package && git rev-parse --short HEAD && git log -1 --format=%ci)
           echo "== network_params schema keys (grep) =="
           grep -rn "gloas_fork_epoch\|fulu_fork_epoch\|electra_fork_epoch" /tmp/ethereum-package/src/package_io/*.star /tmp/ethereum-package/src/*.star 2>/dev/null | head -20 || true
-          echo "== our params.yaml (as committed) =="; cat params.yaml
+          echo "== our params.yaml (as committed) =="; cat "${GITHUB_WORKSPACE}/params.yaml"
+          echo "== BPO epochs from our params (must be >= fulu_fork_epoch) =="
+          grep -E "bpo_[0-9]_epoch|fulu_fork_epoch|gloas_fork_epoch" "${GITHUB_WORKSPACE}/params.yaml"
 
       - name: Run devnet (Fulu genesis, Gloas fork epoch 2)
         run: |
-          kurtosis run github.com/ethpandaops/ethereum-package "$(cat params.yaml)" --enclave ePBS-gloas --image-download always
+          kurtosis run github.com/ethpandaops/ethereum-package "$(cat "${GITHUB_WORKSPACE}/params.yaml")" --enclave ePBS-gloas --image-download always
           kurtosis enclave inspect ePBS-gloas
 
       - name: Wait for chain to pass Gloas fork (epoch 2)
