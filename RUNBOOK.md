@@ -98,3 +98,14 @@ docker system df    # cek disk kembali
 - Tidak ada patch client, tidak ada klaim reproduksi.
 
 Analisis detail dari hasil devnet bersifat privat dan tidak ada di repo ini.
+
+## Dispatch checklist (pelajaran dari run #5, 12 Nov 2026)
+JANGAN push file lalu dispatch dalam perintah yang sama tanpa jeda verifikasi:
+run #5 gagal dengan error yang sama seperti run #4 karena dispatch menyelesaikan
+ref ke commit LAMA — push fix belum terpropagasi saat run di-checkout.
+Prosedur yang benar:
+1. `put-file` (push) → tunggu 200.
+2. Verifikasi file di main via raw.githubusercontent.com (atau `git ls-remote`).
+3. Baru `dispatch`.
+4. Setelah dispatch, verifikasi `head_sha` run baru != sha run lama dan file di
+   commit itu berisi fix (raw URL dengan sha tersebut).
